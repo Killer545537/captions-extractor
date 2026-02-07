@@ -1,5 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { useCallback, useEffect, useState } from 'react';
+import { toast } from 'sonner';
 
 /** Result from extract_captions_with_options command */
 interface PipelineResult {
@@ -83,14 +84,17 @@ export function useCaptionExtractor(): UseCaptionExtractorResult {
         const trimmedUrl = url.trim();
 
         if (!trimmedUrl) {
-            setError('Please enter a YouTube URL.');
+            const msg = 'Please enter a YouTube URL.';
+            setError(msg);
+            toast.warning(msg);
             return;
         }
 
         if (!isValidYouTubeUrl(trimmedUrl)) {
-            setError(
-                'Please enter a valid YouTube URL (e.g., youtube.com/watch?v=... or youtu.be/...)',
-            );
+            const msg =
+                'Please enter a valid YouTube URL (e.g., youtube.com/watch?v=... or youtu.be/...)';
+            setError(msg);
+            toast.warning('Invalid YouTube URL');
             return;
         }
 
@@ -105,6 +109,16 @@ export function useCaptionExtractor(): UseCaptionExtractorResult {
             );
             setTranscript(result.transcript);
             setWasAiCleaned(result.ai_cleaned);
+
+            // Success toast with context
+            const wordCount = result.transcript
+                .split(/\s+/)
+                .filter((w) => w.length > 0).length;
+            toast.success('Captions extracted', {
+                description: result.ai_cleaned
+                    ? `${wordCount.toLocaleString()} words • AI enhanced`
+                    : `${wordCount.toLocaleString()} words`,
+            });
         } catch (err) {
             const errorMessage =
                 typeof err === 'string'
@@ -113,6 +127,9 @@ export function useCaptionExtractor(): UseCaptionExtractorResult {
                       ? err.message
                       : 'Failed to extract captions. Please try again.';
             setError(errorMessage);
+            toast.error('Extraction failed', {
+                description: errorMessage,
+            });
         } finally {
             setIsLoading(false);
         }
@@ -128,6 +145,7 @@ export function useCaptionExtractor(): UseCaptionExtractorResult {
             const cleaned = await cleanTranscriptWithAi(transcript);
             setTranscript(cleaned);
             setWasAiCleaned(true);
+            toast.success('Transcript cleaned with AI');
         } catch (err) {
             const errorMessage =
                 typeof err === 'string'
@@ -136,6 +154,9 @@ export function useCaptionExtractor(): UseCaptionExtractorResult {
                       ? err.message
                       : 'Failed to clean transcript with AI.';
             setError(errorMessage);
+            toast.error('AI cleaning failed', {
+                description: errorMessage,
+            });
         } finally {
             setIsCleaning(false);
         }
@@ -146,6 +167,7 @@ export function useCaptionExtractor(): UseCaptionExtractorResult {
         setTranscript('');
         setError('');
         setWasAiCleaned(false);
+        toast.info('Cleared');
     }, []);
 
     const copyToClipboard = useCallback(async (): Promise<boolean> => {
@@ -153,9 +175,12 @@ export function useCaptionExtractor(): UseCaptionExtractorResult {
 
         try {
             await navigator.clipboard.writeText(transcript);
+            toast.success('Copied to clipboard');
             return true;
         } catch {
-            setError('Failed to copy to clipboard.');
+            const msg = 'Failed to copy to clipboard.';
+            setError(msg);
+            toast.error(msg);
             return false;
         }
     }, [transcript]);
