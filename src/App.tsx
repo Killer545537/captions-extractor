@@ -37,6 +37,7 @@ const App = () => {
         copyToClipboard,
         wordCount,
         charCount,
+        refreshAiAvailability,
     } = useCaptionExtractor();
 
     // Derived state for UI logic
@@ -45,7 +46,7 @@ const App = () => {
 
     return (
         <div className='flex min-h-screen flex-col items-center justify-center px-4 py-12'>
-            <Header />
+            <Header onSettingsChange={refreshAiAvailability} />
 
             {/* Main extraction card */}
             <Card className='w-full max-w-4xl'>

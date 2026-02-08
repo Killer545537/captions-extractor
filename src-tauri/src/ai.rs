@@ -9,8 +9,10 @@ use std::sync::Arc;
 use reqwest::Client as ReqwestClient;
 use serde::Deserialize;
 use serde_json::{json, Value};
+use tauri::AppHandle;
 
 use crate::errors::CaptionError;
+use crate::settings;
 
 /// Default Groq API base endpoint
 const DEFAULT_ENDPOINT: &str = "https://api.groq.com/openai/v1";
@@ -110,6 +112,29 @@ impl GroqClient {
         })?;
 
         info!("Successfully loaded GROQ_API_KEY from environment");
+        Ok(Self::new(api_key, None))
+    }
+
+    /// Creates a new GroqClient using the effective API key.
+    ///
+    /// This checks stored settings first, then falls back to environment variable.
+    ///
+    /// # Parameters
+    ///
+    /// - `app`: The Tauri app handle for accessing stored settings.
+    ///
+    /// # Returns
+    ///
+    /// A `Result` containing the client or an error if no API key is configured.
+    pub fn from_app(app: &AppHandle) -> Result<Self, CaptionError> {
+        trace!("Attempting to create GroqClient from app settings");
+
+        let api_key = settings::get_effective_api_key(app).ok_or_else(|| {
+            error!("No API key configured (checked store and environment)");
+            CaptionError::MissingApiKey("GROQ_API_KEY".into())
+        })?;
+
+        info!("Successfully loaded API key");
         Ok(Self::new(api_key, None))
     }
 
@@ -359,6 +384,44 @@ pub async fn clean_with_ai_from_env(text: &str) -> Result<String, CaptionError> 
 
     debug!("Creating GroqClient from environment");
     let client = GroqClient::from_env()?;
+
+    info!("Starting AI cleaning process");
+    let result = client.clean_transcript(text).await?;
+
+    info!(
+        "AI cleaning complete: {} -> {} characters",
+        text.len(),
+        result.len()
+    );
+
+    Ok(result)
+}
+
+/// Convenience function to clean transcript text using AI from app settings.
+///
+/// This creates a new GroqClient using the effective API key (stored or env)
+/// and cleans the text.
+///
+/// # Parameters
+///
+/// - `app`: The Tauri app handle for accessing stored settings.
+/// - `text`: The transcript text to clean.
+///
+/// # Returns
+///
+/// The cleaned transcript text.
+pub async fn clean_with_ai_from_app(app: &AppHandle, text: &str) -> Result<String, CaptionError> {
+    info!(
+        "clean_with_ai_from_app called with {} characters",
+        text.len()
+    );
+    trace!(
+        "Input preview: {}...",
+        &text.chars().take(100).collect::<String>()
+    );
+
+    debug!("Creating GroqClient from app settings");
+    let client = GroqClient::from_app(app)?;
 
     info!("Starting AI cleaning process");
     let result = client.clean_transcript(text).await?;

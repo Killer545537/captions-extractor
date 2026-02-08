@@ -31,6 +31,9 @@ pub enum CaptionError {
 
     #[error("Failed to parse response: {0}")]
     ParseError(String),
+
+    #[error("Settings error: {0}")]
+    SettingsError(String),
 }
 
 impl serde::Serialize for CaptionError {

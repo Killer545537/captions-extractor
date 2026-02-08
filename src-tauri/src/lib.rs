@@ -2,10 +2,12 @@
 
 use log::{debug, error, info, trace, warn};
 use std::path::PathBuf;
+use tauri::AppHandle;
 
 mod ai;
 mod errors;
 mod pipeline;
+mod settings;
 mod vtt;
 mod yt_dlp;
 
@@ -45,9 +47,10 @@ async fn extract_captions(url: String) -> Result<String, CaptionError> {
 /// When `use_ai` is true, the transcript will be cleaned using the Groq API
 /// to fix spelling, grammar, and punctuation while preserving the original meaning.
 ///
-/// Requires the `GROQ_API_KEY` environment variable to be set when using AI cleaning.
+/// Uses the stored API key or falls back to the `GROQ_API_KEY` environment variable.
 #[tauri::command]
 async fn extract_captions_with_options(
+    app: AppHandle,
     url: String,
     use_ai: bool,
 ) -> Result<PipelineResult, CaptionError> {
@@ -62,39 +65,51 @@ async fn extract_captions_with_options(
 
     trace!("Pipeline options: {:?}", options);
 
-    match pipeline::run(&url, options).await {
-        Ok(result) => {
-            info!(
-                "Successfully extracted captions: {} characters, AI cleaned: {}",
-                result.transcript.len(),
-                result.ai_cleaned
-            );
-            debug!(
-                "Transcript preview: {}...",
-                &result.transcript.chars().take(100).collect::<String>()
-            );
-            Ok(result)
-        }
-        Err(e) => {
-            error!("Failed to extract captions with options: {}", e);
-            Err(e)
+    // Run the pipeline
+    let mut result = pipeline::run(&url, options.clone()).await?;
+
+    // If AI cleaning is requested, apply it using the app's API key
+    if use_ai && !result.ai_cleaned {
+        info!("Applying AI cleaning to extracted transcript");
+        match ai::clean_with_ai_from_app(&app, &result.transcript).await {
+            Ok(cleaned) => {
+                result.transcript = cleaned;
+                result.ai_cleaned = true;
+                info!("AI cleaning applied successfully");
+            }
+            Err(e) => {
+                warn!("AI cleaning failed, returning uncleaned transcript: {}", e);
+                // Don't fail the whole operation, just skip AI cleaning
+            }
         }
     }
+
+    info!(
+        "Successfully extracted captions: {} characters, AI cleaned: {}",
+        result.transcript.len(),
+        result.ai_cleaned
+    );
+    debug!(
+        "Transcript preview: {}...",
+        &result.transcript.chars().take(100).collect::<String>()
+    );
+
+    Ok(result)
 }
 
 /// Check if the Groq API key is configured.
 ///
-/// Returns true if the `GROQ_API_KEY` environment variable is set.
+/// Returns true if an API key is stored in settings or set in the environment.
 #[tauri::command]
-fn is_ai_available() -> bool {
+fn is_ai_available(app: AppHandle) -> bool {
     trace!("is_ai_available called");
-    let available = std::env::var("GROQ_API_KEY").is_ok();
+    let available = settings::is_api_key_configured(&app);
     debug!("AI availability check result: {}", available);
 
     if !available {
-        info!("GROQ_API_KEY not found in environment - AI cleaning disabled");
+        info!("No API key configured - AI cleaning disabled");
     } else {
-        trace!("GROQ_API_KEY found in environment");
+        trace!("API key is configured");
     }
 
     available
@@ -105,7 +120,7 @@ fn is_ai_available() -> bool {
 /// This command can be used to clean a transcript that was previously extracted
 /// without AI cleaning.
 #[tauri::command]
-async fn clean_transcript_with_ai(text: String) -> Result<String, CaptionError> {
+async fn clean_transcript_with_ai(app: AppHandle, text: String) -> Result<String, CaptionError> {
     info!(
         "clean_transcript_with_ai called with {} characters",
         text.len()
@@ -115,7 +130,7 @@ async fn clean_transcript_with_ai(text: String) -> Result<String, CaptionError> 
         &text.chars().take(100).collect::<String>()
     );
 
-    match ai::clean_with_ai_from_env(&text).await {
+    match ai::clean_with_ai_from_app(&app, &text).await {
         Ok(cleaned) => {
             info!(
                 "Successfully cleaned transcript: {} -> {} characters",
@@ -133,6 +148,59 @@ async fn clean_transcript_with_ai(text: String) -> Result<String, CaptionError> 
             Err(e)
         }
     }
+}
+
+/// Save the Groq API key to persistent storage.
+#[tauri::command]
+fn save_api_key(app: AppHandle, api_key: String) -> Result<(), CaptionError> {
+    info!("save_api_key called");
+
+    if api_key.trim().is_empty() {
+        warn!("Attempted to save empty API key");
+        return Err(CaptionError::SettingsError(
+            "API key cannot be empty".to_string(),
+        ));
+    }
+
+    settings::save_api_key(&app, api_key.trim())?;
+    info!("API key saved successfully");
+    Ok(())
+}
+
+/// Get the current API key (masked for security).
+///
+/// Returns the first 8 and last 4 characters with the middle masked.
+#[tauri::command]
+fn get_api_key_masked(app: AppHandle) -> Option<String> {
+    trace!("get_api_key_masked called");
+
+    settings::get_effective_api_key(&app).map(|key| {
+        if key.len() <= 12 {
+            // Very short key, just show asterisks
+            "*".repeat(key.len())
+        } else {
+            // Show first 8 and last 4 characters
+            let prefix = &key[..8];
+            let suffix = &key[key.len() - 4..];
+            let masked_len = key.len() - 12;
+            format!("{}{}...{}", prefix, "*".repeat(masked_len.min(8)), suffix)
+        }
+    })
+}
+
+/// Remove the stored API key.
+#[tauri::command]
+fn remove_api_key(app: AppHandle) -> Result<(), CaptionError> {
+    info!("remove_api_key called");
+    settings::remove_api_key(&app)?;
+    info!("API key removed successfully");
+    Ok(())
+}
+
+/// Check if the API key is from stored settings (vs environment).
+#[tauri::command]
+fn is_api_key_stored(app: AppHandle) -> bool {
+    settings::get_api_key(&app).is_some()
 }
 
 /// Load environment variables from .env file.
@@ -216,7 +284,7 @@ fn load_dotenv() {
         }
     }
 
-    warn!("No .env file found in any searched location");
+    debug!("No .env file found in any searched location");
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -230,22 +298,25 @@ pub fn run() {
     // Load .env file before starting the application
     load_dotenv();
 
-    // Log AI availability status
+    // Log environment API key status (stored key status logged after app starts)
     if std::env::var("GROQ_API_KEY").is_ok() {
-        info!("GROQ_API_KEY is configured - AI cleaning available");
-    } else {
-        warn!("GROQ_API_KEY not set - AI cleaning will be disabled");
+        info!("GROQ_API_KEY found in environment");
     }
 
     info!("Building Tauri application");
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_store::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
             extract_captions,
             extract_captions_with_options,
             is_ai_available,
             clean_transcript_with_ai,
+            save_api_key,
+            get_api_key_masked,
+            remove_api_key,
+            is_api_key_stored,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -256,9 +327,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_is_ai_available_without_key() {
-        // This test assumes GROQ_API_KEY is not set in the test environment
-        // If it is set, this test should still pass as it just checks the function works
-        let _ = is_ai_available();
+    fn test_is_ai_available_without_app() {
+        // This test just verifies the module compiles correctly
+        // Full integration tests would require a Tauri app context
     }
 }

@@ -1,8 +1,14 @@
 import { Youtube } from 'lucide-react';
 import { ModeToggle } from '@/components/mode-toggle';
+import { SettingsDialog } from './settings-dialog';
 
-/** App header with branding and theme toggle */
-export function Header() {
+interface HeaderProps {
+    /** Callback when settings are changed (API key saved/removed) */
+    onSettingsChange?: () => void;
+}
+
+/** App header with branding, settings, and theme toggle */
+export function Header({ onSettingsChange }: HeaderProps) {
     return (
         <header className='mb-8 flex w-full max-w-4xl items-center justify-between'>
             {/* App branding */}
@@ -20,8 +26,11 @@ export function Header() {
                 </div>
             </div>
 
-            {/* Theme toggle */}
-            <ModeToggle />
+            {/* Actions: Settings and Theme toggle */}
+            <div className='flex items-center gap-2'>
+                <SettingsDialog onSettingsChange={onSettingsChange} />
+                <ModeToggle />
+            </div>
         </header>
     );
 }

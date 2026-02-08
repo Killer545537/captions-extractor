@@ -25,6 +25,8 @@ export interface UseCaptionExtractorResult {
     copyToClipboard: () => Promise<boolean>;
     wordCount: number;
     charCount: number;
+    /** Refresh AI availability status (call after settings change) */
+    refreshAiAvailability: () => Promise<void>;
 }
 
 const YOUTUBE_URL_REGEX =
@@ -69,10 +71,20 @@ export function useCaptionExtractor(): UseCaptionExtractorResult {
     const [isAiAvailable, setIsAiAvailable] = useState(false);
     const [wasAiCleaned, setWasAiCleaned] = useState(false);
 
+    /** Refresh AI availability from backend */
+    const refreshAiAvailability = useCallback(async () => {
+        const available = await checkAiAvailability();
+        setIsAiAvailable(available);
+        // If AI becomes unavailable, disable the toggle
+        if (!available && useAi) {
+            setUseAi(false);
+        }
+    }, [useAi]);
+
     // Check AI availability on mount
     useEffect(() => {
-        checkAiAvailability().then(setIsAiAvailable);
-    }, []);
+        refreshAiAvailability();
+    }, [refreshAiAvailability]);
 
     const wordCount = transcript
         ? transcript.split(/\s+/).filter((word) => word.length > 0).length
@@ -111,13 +123,13 @@ export function useCaptionExtractor(): UseCaptionExtractorResult {
             setWasAiCleaned(result.ai_cleaned);
 
             // Success toast with context
-            const wordCount = result.transcript
+            const extractedWordCount = result.transcript
                 .split(/\s+/)
                 .filter((w) => w.length > 0).length;
             toast.success('Captions extracted', {
                 description: result.ai_cleaned
-                    ? `${wordCount.toLocaleString()} words • AI enhanced`
-                    : `${wordCount.toLocaleString()} words`,
+                    ? `${extractedWordCount.toLocaleString()} words • AI enhanced`
+                    : `${extractedWordCount.toLocaleString()} words`,
             });
         } catch (err) {
             const errorMessage =
@@ -202,5 +214,6 @@ export function useCaptionExtractor(): UseCaptionExtractorResult {
         copyToClipboard,
         wordCount,
         charCount,
+        refreshAiAvailability,
     };
 }
