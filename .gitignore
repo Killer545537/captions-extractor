@@ -27,3 +27,6 @@ dist-ssr
 .env
 .env.local
 .env.*.local
+
+# Bundled binaries (yt-dlp sidecar)
+src-tauri/binaries/

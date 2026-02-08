@@ -1,19 +1,17 @@
 //! yt-dlp integration module for downloading YouTube captions.
 //!
 //! This module provides functionality to download captions from YouTube videos
-//! using the yt-dlp command-line tool.
+//! using the bundled yt-dlp sidecar binary.
 
 use log::{debug, error, info, trace, warn};
-use std::{
-    path::{Path, PathBuf},
-    process::{Command, Output},
-};
-
+use std::path::{Path, PathBuf};
+use tauri::Manager;
+use tauri_plugin_shell::ShellExt;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum YtDlpError {
-    #[error("yt-dlp is not installed or not found in PATH")]
+    #[error("yt-dlp sidecar not found")]
     NotInstalled,
 
     #[error("Failed to execute yt-dlp: {0}")]
@@ -29,46 +27,16 @@ pub enum YtDlpError {
     OutputDirReadFailed(String),
 }
 
-/// Check if yt-dlp is available in the system PATH
-pub fn is_available() -> bool {
-    trace!("Checking if yt-dlp is available in PATH");
-
-    let result = Command::new("yt-dlp")
-        .arg("--version")
-        .output()
-        .map(|output| {
-            let success = output.status.success();
-            if success {
-                let version = String::from_utf8_lossy(&output.stdout);
-                debug!("yt-dlp found, version: {}", version.trim());
-            }
-            success
-        })
-        .unwrap_or_else(|e| {
-            debug!("yt-dlp not found or failed to execute: {}", e);
-            false
-        });
-
-    if result {
-        trace!("yt-dlp availability check: OK");
-    } else {
-        warn!("yt-dlp is not available in PATH");
-    }
-
-    result
-}
-
-/// Download captions for a video URL and return the path to the VTT file
-pub fn download_captions(url: &str, out_dir: &Path) -> Result<PathBuf, YtDlpError> {
+/// Download captions for a video URL using the bundled yt-dlp sidecar.
+///
+/// This function uses Tauri's sidecar functionality to run the bundled yt-dlp binary.
+pub async fn download_captions_with_sidecar(
+    app: &tauri::AppHandle,
+    url: &str,
+    out_dir: &Path,
+) -> Result<PathBuf, YtDlpError> {
     info!("Starting caption download for URL: {}", url);
     debug!("Output directory: {}", out_dir.display());
-
-    // First, check if yt-dlp is available
-    trace!("Verifying yt-dlp availability before download");
-    if !is_available() {
-        error!("yt-dlp is not installed or not found in PATH");
-        return Err(YtDlpError::NotInstalled);
-    }
 
     // Clean up any existing VTT files in the output directory to avoid confusion
     debug!("Cleaning up existing VTT files in output directory");
@@ -89,22 +57,32 @@ pub fn download_captions(url: &str, out_dir: &Path) -> Result<PathBuf, YtDlpErro
         url,
     ];
 
-    info!("Executing yt-dlp command");
+    info!("Executing yt-dlp sidecar command");
     debug!("yt-dlp arguments: {:?}", args);
 
-    let output: Output = Command::new("yt-dlp").args(args).output().map_err(|e| {
-        error!("Failed to execute yt-dlp command: {}", e);
-        debug!("Execution error details: {:?}", e);
-        YtDlpError::ExecutionFailed(e.to_string())
-    })?;
+    // Use the sidecar command
+    let shell = app.shell();
+    let output = shell
+        .sidecar("yt-dlp")
+        .map_err(|e| {
+            error!("Failed to create yt-dlp sidecar command: {}", e);
+            YtDlpError::NotInstalled
+        })?
+        .args(args)
+        .output()
+        .await
+        .map_err(|e| {
+            error!("Failed to execute yt-dlp sidecar: {}", e);
+            YtDlpError::ExecutionFailed(e.to_string())
+        })?;
 
-    trace!("yt-dlp exit status: {}", output.status);
+    trace!("yt-dlp exit status: {:?}", output.status);
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         let stdout = String::from_utf8_lossy(&output.stdout);
 
-        warn!("yt-dlp command failed with status: {}", output.status);
+        warn!("yt-dlp command failed with status: {:?}", output.status);
         debug!("yt-dlp stderr:\n{}", stderr);
         debug!("yt-dlp stdout:\n{}", stdout);
 
@@ -133,11 +111,8 @@ pub fn download_captions(url: &str, out_dir: &Path) -> Result<PathBuf, YtDlpErro
             error!("yt-dlp output: {}", first_line);
             first_line.to_string()
         } else {
-            error!(
-                "yt-dlp failed with no output, exit code: {}",
-                output.status.code().unwrap_or(-1)
-            );
-            format!("Command exited with status: {}", output.status)
+            error!("yt-dlp failed with no output");
+            "Command failed with unknown error".to_string()
         };
 
         return Err(YtDlpError::CommandFailed(error_msg));
@@ -205,7 +180,7 @@ fn find_vtt_file(dir: &Path) -> Result<PathBuf, YtDlpError> {
 }
 
 /// Remove existing VTT files from the output directory
-fn cleanup_vtt_files(dir: &Path) {
+pub fn cleanup_vtt_files(dir: &Path) {
     trace!("Starting VTT file cleanup in: {}", dir.display());
 
     let entries = match std::fs::read_dir(dir) {
@@ -250,14 +225,6 @@ fn cleanup_vtt_files(dir: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_is_available() {
-        // This test just ensures the function doesn't panic
-        let result = is_available();
-        // Log the result for debugging
-        println!("yt-dlp is_available: {}", result);
-    }
 
     #[test]
     fn test_cleanup_vtt_files_nonexistent_dir() {

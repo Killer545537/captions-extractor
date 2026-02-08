@@ -19,11 +19,11 @@ use pipeline::{PipelineOptions, PipelineResult};
 ///
 /// This is the basic extraction command that downloads captions and converts them to plain text.
 #[tauri::command]
-async fn extract_captions(url: String) -> Result<String, CaptionError> {
+async fn extract_captions(app: AppHandle, url: String) -> Result<String, CaptionError> {
     info!("extract_captions called with URL: {}", url);
     trace!("Starting caption extraction without AI cleaning");
 
-    match pipeline::run(&url, PipelineOptions::default()).await {
+    match pipeline::run(&app, &url, PipelineOptions::default()).await {
         Ok(result) => {
             info!(
                 "Successfully extracted captions: {} characters",
@@ -66,7 +66,7 @@ async fn extract_captions_with_options(
     trace!("Pipeline options: {:?}", options);
 
     // Run the pipeline
-    let mut result = pipeline::run(&url, options.clone()).await?;
+    let mut result = pipeline::run(&app, &url, options.clone()).await?;
 
     // If AI cleaning is requested, apply it using the app's API key
     if use_ai && !result.ai_cleaned {
@@ -307,6 +307,7 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_store::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
             extract_captions,

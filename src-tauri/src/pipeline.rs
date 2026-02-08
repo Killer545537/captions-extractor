@@ -1,7 +1,7 @@
 //! Pipeline module that orchestrates the caption extraction workflow.
 //!
 //! The pipeline combines:
-//! 1. Downloading captions from YouTube via yt-dlp
+//! 1. Downloading captions from YouTube via bundled yt-dlp sidecar
 //! 2. Parsing VTT content to plain text
 //!
 //! AI cleaning is handled at the command level, not in the pipeline.
@@ -10,6 +10,7 @@ use log::{debug, error, info, trace, warn};
 use serde::Serialize;
 use std::fs;
 use std::path::Path;
+use tauri::AppHandle;
 
 use crate::errors::CaptionError;
 use crate::vtt;
@@ -69,18 +70,23 @@ fn cleanup_temp_dir(dir: &Path) {
 /// Run the caption extraction pipeline.
 ///
 /// This function:
-/// 1. Downloads captions from the given YouTube URL
+/// 1. Downloads captions from the given YouTube URL using bundled yt-dlp
 /// 2. Parses the VTT file to extract plain text
 ///
 /// AI cleaning is NOT performed here - it's handled at the command level.
 ///
 /// # Arguments
+/// * `app` - The Tauri app handle for accessing the sidecar
 /// * `url` - The YouTube video URL
 /// * `_options` - Pipeline configuration options (reserved for future use)
 ///
 /// # Returns
 /// A `PipelineResult` containing the transcript and metadata
-pub async fn run(url: &str, _options: PipelineOptions) -> Result<PipelineResult, CaptionError> {
+pub async fn run(
+    app: &AppHandle,
+    url: &str,
+    _options: PipelineOptions,
+) -> Result<PipelineResult, CaptionError> {
     info!("Starting pipeline for URL: {}", url);
 
     let dir = std::env::temp_dir().join("caption_cleaner");
@@ -96,12 +102,14 @@ pub async fn run(url: &str, _options: PipelineOptions) -> Result<PipelineResult,
     debug!("Cleaning up previous files before download");
     cleanup_temp_dir(&dir);
 
-    // Step 1: Download captions
+    // Step 1: Download captions using sidecar
     info!("Step 1/2: Downloading captions from YouTube");
-    let vtt_path = yt_dlp::download_captions(url, &dir).map_err(|e| {
-        error!("Failed to download captions: {}", e);
-        CaptionError::Download(e)
-    })?;
+    let vtt_path = yt_dlp::download_captions_with_sidecar(app, url, &dir)
+        .await
+        .map_err(|e| {
+            error!("Failed to download captions: {}", e);
+            CaptionError::Download(e)
+        })?;
     info!("Captions downloaded to: {}", vtt_path.display());
 
     // Step 2: Read and parse VTT content
